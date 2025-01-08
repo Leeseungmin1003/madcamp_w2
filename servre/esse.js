@@ -10,7 +10,6 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-// 날짜 변환 함수
 const formatDate = (isoDate) => {
   const date = new Date(isoDate);
   const year = date.getFullYear();
@@ -22,12 +21,14 @@ const formatDate = (isoDate) => {
 function MyChannel() {
   const [googleId, setGoogleId] = useState("");
   const [channels, setChannels] = useState([]);
-  const [accStats, setAccStats] = useState([]);
-  const [filteredStats, setFilteredStats] = useState([]);
+  const [channelStats, setChannelStats] = useState([]);
+  const [filteredChannelStats, setFilteredChannelStats] = useState([]);
+  const [videoStats, setVideoStats] = useState([]);
+  const [selectedVideoIndex, setSelectedVideoIndex] = useState(0);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [showViews, setShowViews] = useState(true);
-  const [showSubscribers, setShowSubscribers] = useState(true);
+  const [showViews, setShowViews] = useState(true); // 누적 조회수 상태 추가
+  const [showSubscribers, setShowSubscribers] = useState(true); // 누적 구독자 수 상태 추가
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -45,24 +46,6 @@ function MyChannel() {
     setError(null);
 
     try {
-      if (googleId === "104002149398543189740") {
-        console.log("테스트 데이터 로드 중...");
-        const response = await fetch("/apssaeChannel.json");
-        if (!response.ok) throw new Error("테스트 데이터 로드 실패");
-
-        const mockData = await response.json();
-        const formattedData = mockData.accStats.map((stat) => ({
-          ...stat,
-          date: formatDate(stat.date), // 날짜 포맷 적용
-        }));
-        setChannels(mockData.channels || []);
-        setAccStats(formattedData || []);
-        setFilteredStats(formattedData || []);
-        setStartDate(formattedData[0]?.date || "");
-        setEndDate(formattedData[formattedData.length - 1]?.date || "");
-        return;
-      }
-
       const response = await fetch("http://localhost:8080/mychannel", {
         method: "POST",
         headers: {
@@ -74,15 +57,23 @@ function MyChannel() {
       if (!response.ok) throw new Error("서버 요청 실패");
 
       const data = await response.json();
-      const formattedData = data.accStats.map((stat) => ({
+
+      const formattedChannelStats = (data.accStats || []).map((stat) => ({
         ...stat,
-        date: formatDate(stat.date), // 날짜 포맷 적용
+        date: formatDate(stat.date),
       }));
+
+      const formattedVideoStats = (data.videoStats || []).map((stat) => ({
+        ...stat,
+        date: formatDate(stat.date),
+      }));
+
       setChannels(data.channels || []);
-      setAccStats(formattedData || []);
-      setFilteredStats(formattedData || []);
-      setStartDate(formattedData[0]?.date || "");
-      setEndDate(formattedData[formattedData.length - 1]?.date || "");
+      setChannelStats(formattedChannelStats);
+      setVideoStats(formattedVideoStats);
+      setFilteredChannelStats(formattedChannelStats);
+      setStartDate(formattedChannelStats[0]?.date || "");
+      setEndDate(formattedChannelStats[formattedChannelStats.length - 1]?.date || "");
     } catch (err) {
       console.error("오류 발생:", err);
       setError("유튜브 채널 정보를 가져오는 데 실패했습니다.");
@@ -91,30 +82,36 @@ function MyChannel() {
     }
   };
 
-  const filterStatsByDate = () => {
-    const filtered = accStats.filter(
+  const filterChannelStatsByDate = () => {
+    const filtered = channelStats.filter(
       (stat) =>
-        (!startDate || stat.date >= startDate) &&
-        (!endDate || stat.date <= endDate)
+        (!startDate || new Date(stat.date) >= new Date(startDate)) &&
+        (!endDate || new Date(stat.date) <= new Date(endDate))
     );
-    setFilteredStats(filtered);
+    setFilteredChannelStats(filtered);
   };
 
   useEffect(() => {
-    filterStatsByDate();
+    filterChannelStatsByDate();
   }, [startDate, endDate]);
 
-  const calculateYAxisRange = (key) => {
-    const values = filteredStats.map((stat) => stat[key]);
-    const min = Math.floor(Math.min(...values) / 10) * 10;
-    const max = Math.ceil(Math.max(...values) / 10) * 10;
-    return [min, max];
+  const handlePreviousVideo = () => {
+    setSelectedVideoIndex((prevIndex) =>
+      prevIndex > 0 ? prevIndex - 1 : channels[0].videos.length - 1
+    );
   };
 
-  const yAxisRange = {
-    views: calculateYAxisRange("acc_views"),
-    subscribers: calculateYAxisRange("acc_subscribers"),
+  const handleNextVideo = () => {
+    setSelectedVideoIndex((prevIndex) =>
+      prevIndex < channels[0].videos.length - 1 ? prevIndex + 1 : 0
+    );
   };
+
+  const selectedVideo = channels[0]?.videos?.[selectedVideoIndex] || null;
+
+  const selectedVideoStats = videoStats.filter(
+    (stat) => stat.video_id === selectedVideo?.videoId
+  );
 
   return (
     <div className="my-channel-container">
@@ -135,142 +132,135 @@ function MyChannel() {
       </div>
 
       <div style={{ display: "flex", alignItems: "flex-start" }}>
-        <div className="channel-list" style={{ width: "30%", marginRight: "20px" }}>
-          {channels.length > 0 && (
-            <ul>
-              {channels.map((channel, index) => (
-                <li
-                  key={index}
-                  className="channel-item"
-                  style={{ marginBottom: "20px" }}
-                >
-                  <a
-                    href={channel.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <h3>{channel.name}</h3>
-                  </a>
-                  <p>구독자 수: {channel.subscribers}</p>
-                  <img
-                    src={channel.channelPicture}
-                    alt={channel.name}
-                    className="channel-picture"
-                    style={{
-                      width: "400px",
-                      height: "400px",
-                      objectFit: "cover",
-                    }}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+      <div className="sidebar" style={{ width: "30%", marginRight: "20px" }}>
+  {channels.length > 0 && (
+    <div>
+      <h2>채널 정보</h2>
+      <ul>
+        {channels.map((channel, index) => (
+          <li key={index} className="channel-item" style={{ marginBottom: "20px" }}>
+            {/* 채널 사진 */}
+            <img
+              src={channel.channelPicture}
+              alt={`${channel.name} 사진`}
+              style={{ width: "50px", height: "50px", borderRadius: "50%", marginBottom: "10px" }}
+            />
+            {/* 채널 이름 */}
+            <h3>
+              <a href={channel.url} target="_blank" rel="noopener noreferrer">
+                {channel.name}
+              </a>
+            </h3>
+            {/* 구독자 수 */}
+            <p>구독자 수: {channel.subscribers}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )}
+</div>
 
-        <div className="acc-stats" style={{ flex: 1 }}>
-          {filteredStats.length > 0 && (
-            <>
-              <h2>채널 통계</h2>
-              <div className="date-filter">
-                <label>
-                  시작 날짜:
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                  />
-                </label>
-                <label>
-                  종료 날짜:
-                  <input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                  />
-                </label>
-              </div>
-              <div className="chart-controls">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={showViews}
-                    onChange={() => setShowViews(!showViews)}
-                  />
-                  조회수 보기
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={showSubscribers}
-                    onChange={() => setShowSubscribers(!showSubscribers)}
-                  />
-                  구독자 수 보기
-                </label>
-              </div>
-              <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={filteredStats}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
-                  <YAxis
-                    yAxisId="left"
-                    domain={yAxisRange.views}
-                    tickFormatter={(value) => Math.round(value)}
-                  />
-                  <YAxis
-                    yAxisId="right"
-                    domain={yAxisRange.subscribers}
-                    orientation="right"
-                    tickFormatter={(value) => Math.round(value)}
-                  />
-                  <Tooltip />
-                  <Legend />
-                  {showViews && (
-                    <Line
-                      yAxisId="left"
-                      type="monotone"
-                      dataKey="acc_views"
-                      name="누적 조회수"
-                      stroke="#8884d8"
-                      activeDot={{ r: 8 }}
-                    />
-                  )}
-                  {showSubscribers && (
-                    <Line
-                      yAxisId="right"
-                      type="monotone"
-                      dataKey="acc_subscribers"
-                      name="누적 구독자 수"
-                      stroke="#82ca9d"
-                    />
-                  )}
-                </LineChart>
-              </ResponsiveContainer>
-            </>
-          )}
-        </div>
+
+<div style={{ flex: 1 }}>
+  <h2>채널 통계</h2>
+
+  {/* 체크박스 섹션 */}
+  <div style={{ marginBottom: "20px" }}>
+    <label style={{ marginRight: "10px" }}>
+      <input
+        type="checkbox"
+        checked={showViews}
+        onChange={() => setShowViews((prev) => !prev)}
+      />
+      누적 조회수 보기
+    </label>
+    <label>
+      <input
+        type="checkbox"
+        checked={showSubscribers}
+        onChange={() => setShowSubscribers((prev) => !prev)}
+      />
+      누적 구독자 수 보기
+    </label>
+  </div>
+
+  {/* 그래프 섹션 */}
+  <ResponsiveContainer width="100%" height={400}>
+    <LineChart data={filteredChannelStats}>
+      {/* 격자선 */}
+      <CartesianGrid strokeDasharray="3 3" />
+      {/* x축 */}
+      <XAxis dataKey="date" />
+      {/* y축 - 누적 조회수 */}
+      <YAxis
+        yAxisId="left"
+        label={{ value: "누적 조회수", angle: -90, position: "insideLeft" }}
+      />
+      {/* y축 - 누적 구독자 수 */}
+      <YAxis
+        yAxisId="right"
+        orientation="right"
+        label={{ value: "누적 구독자 수", angle: -90, position: "insideRight" }}
+      />
+      {/* 툴팁 */}
+      <Tooltip />
+      {/* 범례 */}
+      <Legend />
+      {/* 누적 조회수 라인 - 체크박스 상태에 따라 표시 */}
+      {showViews && (
+        <Line
+          yAxisId="left"
+          type="monotone"
+          dataKey="acc_views"
+          stroke="#8884d8"
+          name="누적 조회수"
+          activeDot={{ r: 8 }}
+        />
+      )}
+      {/* 누적 구독자 수 라인 - 체크박스 상태에 따라 표시 */}
+      {showSubscribers && (
+        <Line
+          yAxisId="right"
+          type="monotone"
+          dataKey="acc_subscribers"
+          stroke="#82ca9d"
+          name="누적 구독자 수"
+        />
+      )}
+    </LineChart>
+  </ResponsiveContainer>
+</div>
+
+
       </div>
 
-      <div className="video-preview-section" style={{ marginTop: "20px" }}>
-        {channels.map((channel, index) => (
-          channel.topVideo && (
-            <div key={index} className="video-preview">
-              <h4>대표 영상: {channel.topVideo.title}</h4>
-              <a
-                href={`https://www.youtube.com/watch?v=${channel.topVideo.videoId}`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <img
-                  src={channel.topVideo.thumbnail}
-                  alt={channel.topVideo.title}
-                  style={{ width: "400px", height: "400px", objectFit: "cover" }}
-                />
-              </a>
-              <p>조회수: {channel.topVideo.viewCount}</p>
+      <div className="bottom-section" style={{ display: "flex", marginTop: "20px" }}>
+        <div style={{ flex: 1 }}>
+          <h2>동영상별 통계</h2>
+          {selectedVideo && (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={selectedVideoStats}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Line type="monotone" dataKey="acc_views" stroke="#8884d8" name="누적 조회수" />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        <div style={{ width: "30%", textAlign: "center" }}>
+          <button onClick={handlePreviousVideo}>← 이전</button>
+          <button onClick={handleNextVideo}>다음 →</button>
+          {selectedVideo && (
+            <div style={{ marginTop: "10px" }}>
+              <h4>{selectedVideo.title}</h4>
+              <img src={selectedVideo.thumbnail} alt={selectedVideo.title} style={{ width: "100%" }} />
             </div>
-          )
-        ))}
+          )}
+        </div>
       </div>
     </div>
   );
