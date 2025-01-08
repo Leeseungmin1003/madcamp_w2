@@ -67,37 +67,30 @@ async function getTopVideo(channelId) {
   }
 }
 
-const fetchAllVideos = async (channelId, googleId) => {
+const getAllVideo = async (channelId, accessToken) => {
   let nextPageToken = null;
   const allVideos = [];
   do {
-      const response = await youtube.search.list({
-          part: 'snippet',
-          channelId: channelId,
-          maxResults: 50,
-          pageToken: nextPageToken,
-          type: 'video',
-      });
+    const response = await youtube.search.list({
+      part: "snippet",
+      channelId: channelId,
+      maxResults: 50,
+      pageToken: nextPageToken,
+      type: "video",
+      headers: {
+        Authorization: `Bearer ${accessToken}`, // OAuth2 인증 토큰 추가
+      },
+    });
 
-      const videos = response.data.items.map(video => ({
-          videoId: video.id.videoId,
-          title: video.snippet.title,
-          thumbnail: video.snippet.thumbnails.medium.url,
-      }));
+    const videos = response.data.items.map((video) => ({
+      videoId: video.id.videoId,
+      title: video.snippet.title,
+      thumbnail: video.snippet.thumbnails.medium.url,
+    }));
 
-      allVideos.push(...videos);
-      nextPageToken = response.data.nextPageToken;
+    allVideos.push(...videos);
+    nextPageToken = response.data.nextPageToken;
   } while (nextPageToken);
-
-  // DB에 저장
-  for (const video of allVideos) {
-      await db.query(
-          `INSERT INTO youtube_videos (google_id, video_id, title, thumbnail_url)
-           VALUES (?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE title = VALUES(title), thumbnail_url = VALUES(thumbnail_url)`,
-          [googleId, video.videoId, video.title, video.thumbnail]
-      );
-  }
 
   return allVideos;
 };
@@ -214,7 +207,12 @@ app.get('/redirect', async (req, res) => {
 
     console.log('User info and tokens saved to database:', result);
 
-    res.json({ user });
+    // res.json({ user });
+    const redirectWithUserData = `http://localhost:3000?user=${encodeURIComponent(
+      JSON.stringify(user)
+    )}`;
+    res.redirect(redirectWithUserData);
+    
   } catch (error) {
     console.error('Error during authentication:', error);
     res.status(500).send('Authentication failed');
@@ -440,99 +438,73 @@ app.post('/favorite', async (req, res) => {
   }
 });
 
-app.post('/mychannel', async (req, res) => {
+app.post("/mychannel", async (req, res) => {
   const { googleId } = req.body;
 
   if (!googleId) {
-    return res.status(400).json({ error: 'Google ID를 제공하세요.' });
+    return res.status(400).json({ error: "Google ID를 제공하세요." });
   }
 
   try {
     const [rows] = await db.query(
-      'SELECT hashed_access_token AS access_token, hashed_refresh_token AS refresh_token, token_expires_at FROM users WHERE google_id = ?',
+      "SELECT hashed_access_token AS accessToken, hashed_refresh_token AS refreshToken, token_expires_at AS expiresAt FROM users WHERE google_id = ?",
       [googleId]
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
+      return res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
     }
 
-    let { access_token, refresh_token, token_expires_at } = rows[0];
-
-    // Access Token 만료 확인
-    if (Date.now() > token_expires_at) {
-      console.log('Access Token이 만료되었습니다. Refresh Token으로 갱신을 시도합니다.');
-
-      if (!refresh_token) {
-        return res.status(403).json({ error: '갱신 토큰이 없습니다. 다시 로그인해주세요.' });
-      }
-
-      try {
-        const tokenResponse = await oauth2Client.refreshToken(refresh_token);
-        access_token = tokenResponse.credentials.access_token;
-        const newExpiresAt = Date.now() + tokenResponse.credentials.expires_in * 1000;
-
-        // 새로운 Access Token과 만료 시간 저장
-        await db.query(
-          'UPDATE users SET hashed_access_token = ?, token_expires_at = ? WHERE google_id = ?',
-          [access_token, newExpiresAt, googleId]
-        );
-
-        console.log('Access Token 갱신 성공:', access_token);
-        oauth2Client.setCredentials({ access_token });
-      } catch (refreshError) {
-        console.error('Refresh Token으로 Access Token 갱신 실패:', refreshError);
-        return res.status(500).json({ error: 'Access Token 갱신 실패. 다시 로그인해주세요.' });
-      }
-    } else {
-      console.log('Access Token 유효:', access_token);
-      oauth2Client.setCredentials({ access_token });
+    let { accessToken, refreshToken, expiresAt } = rows[0];
+    if (Date.now() > expiresAt) {
+      const { credentials } = await oauth2Client.refreshToken(refreshToken);
+      accessToken = credentials.access_token;
+      await db.query(
+        "UPDATE users SET hashed_access_token = ?, token_expires_at = ? WHERE google_id = ?",
+        [accessToken, Date.now() + credentials.expires_in * 1000, googleId]
+      );
     }
 
-    // YouTube API 호출
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    // YouTube 채널 데이터 가져오기
     const youtubeResponse = await youtube.channels.list({
-      part: 'snippet,statistics',
+      part: "snippet,statistics",
       mine: true,
       headers: {
-        Authorization: `Bearer ${access_token}`,
+        Authorization: `Bearer ${accessToken}`,
       },
     });
 
-    // 채널 정보와 네 번째 인기 동영상 추가
     const channels = await Promise.all(
       youtubeResponse.data.items.map(async (channel) => {
-        const fourthVideo = await getFourthVideo(channel.id);
+        const videos = await getAllVideo(channel.id, accessToken);
 
         return {
           name: channel.snippet.title || "채널 이름 없음",
           url: `https://www.youtube.com/channel/${channel.id}`,
-          subscribers: channel.statistics.subscriberCount?.toString() || "0",
+          subscribers: channel.statistics.subscriberCount || 0, // 구독자 수 추가
           channelPicture:
-            channel.snippet.thumbnails?.maxres?.url ||
-            channel.snippet.thumbnails?.standard?.url ||
-            channel.snippet.thumbnails?.high?.url ||
-            channel.snippet.thumbnails?.medium?.url ||
-            channel.snippet.thumbnails?.default?.url ||
-            "",
-          topVideo: {
-            videoId: fourthVideo?.videoId || "",
-            title: fourthVideo?.title || "대표 영상 없음",
-            thumbnail: fourthVideo?.thumbnail || "",
-            viewCount: fourthVideo?.viewCount?.toString() || "0",
-          },
+            channel.snippet.thumbnails?.high?.url || "", // 채널 사진 추가
+          videos,
         };
       })
     );
-    // channel_acc_stat 테이블에서 데이터 가져오기
+
+    // 모든 video_acc_views 데이터 가져오기 (테스트 목적)
+    const [videoStats] = await db.query(
+      "SELECT video_id, date, acc_views FROM video_acc_views"
+    );
+
     const [accStats] = await db.query(
-      'SELECT date, acc_views, acc_subscribers FROM channel_acc_stat WHERE google_id = ? ORDER BY date ASC',
+      "SELECT date, acc_views, acc_subscribers FROM channel_acc_stat WHERE google_id = ? ORDER BY date ASC",
       [googleId]
     );
 
-    res.json({ channels, accStats });
+    res.json({ channels, videoStats, accStats });
   } catch (error) {
-    console.error('Error fetching user or calling API:', error);
-    res.status(500).json({ error: '서버 오류' });
+    console.error("서버 오류:", error.response?.data || error);
+    res.status(500).json({ error: "서버 오류 발생" });
   }
 });
 
